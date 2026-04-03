@@ -78,12 +78,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 下载前端产物到 web/dist/，编译时由 rust-embed 嵌入
-      - name: Download frontend dist
-        uses: actions/download-artifact@v4
+      - uses: actions/setup-node@v4
         with:
-          name: web-dist
-          path: web/dist/
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: cd web && npm ci && npm run build
 
       - uses: dtolnay/rust-toolchain@stable
         with:
