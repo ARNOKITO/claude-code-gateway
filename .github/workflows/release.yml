@@ -17,7 +17,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_BUILD_JOBS: 4
-  RUSTFLAGS: "-C codegen-units=4 -C lto=thin"
 
 jobs:
   # 读取 .version 文件 + 构建前端（供所有平台嵌入）
@@ -78,14 +77,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      # 下载前端产物到 web/dist/，编译时由 rust-embed 嵌入
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
         with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
-
-      - name: Build frontend
-        run: cd web && npm ci && npm run build
+          name: web-dist
+          path: web/dist/
 
       - uses: dtolnay/rust-toolchain@stable
         with:
