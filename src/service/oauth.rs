@@ -72,12 +72,14 @@ impl TokenTester {
             .json(&body)
             .send()
             .await
-            .map_err(|e| AppError::Internal(format!("request failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("request failed: {:?}", e)))?;
 
         if resp.status() != 200 {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
             return Err(AppError::Internal(format!(
-                "token invalid: status {}",
-                resp.status()
+                "token test failed: status {} {}",
+                status, text
             )));
         }
         Ok(())

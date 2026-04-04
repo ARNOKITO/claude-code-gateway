@@ -149,7 +149,7 @@ pub trait ResolvesClientCert: fmt::Debug + Send + Sync {
 pub struct ClientConfig {
     /// Source of randomness and other crypto.
     /// !craft! pub(super) -> pub(crate)
-    pub(crate) provider: Arc<CryptoProvider>,
+    pub provider: Arc<CryptoProvider>,
 
     /// Which ALPN protocols we include in our client hello.
     /// If empty, no ALPN extension is sent.

@@ -16,7 +16,7 @@ http-body-util = "0.1"
 tokio = { version = "1", features = ["full"] }
 
 # TLS
-rustls = { package = "craftls", path = "craftls/rustls", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls = { path = "craftls/rustls", default-features = false, features = ["ring", "logging", "tls12"] }
 tokio-rustls = "0.25"
 webpki-roots = "0.26"
 rustls-pki-types = "1"
@@ -33,6 +33,8 @@ sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "postgres", "ch
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
 
 # Crypto
+ml-kem = "0.2.3"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 sha2 = "0.10"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 rand = "0.8"
@@ -55,7 +57,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio-socks = "0.5"
 
 # HTTP Client
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots", "stream", "json", "socks"] }
+reqwest = { version = "=0.12.4", default-features = false, features = ["rustls-tls-manual-roots", "stream", "json", "socks"] }
 scopeguard = "1"
 dotenvy = "0.15"
 
@@ -65,4 +67,4 @@ thiserror = "1"
 rust-embed = "8"
 
 [patch.crates-io]
-rustls = { package = "craftls", path = "craftls/rustls" }
+rustls = { path = "craftls/rustls" }
