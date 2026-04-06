@@ -34,7 +34,10 @@ onMounted(loadDashboard);
     <header class="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-[#e8e2d9]/60 px-6 py-3">
       <div class="max-w-7xl mx-auto flex items-center justify-between">
         <div class="flex items-center gap-6">
-          <h1 class="text-lg font-semibold text-[#29261e] tracking-tight">Claude Code Gateway</h1>
+          <div class="flex items-center gap-2">
+            <img src="/favicon.svg" alt="Logo" class="w-6 h-6" />
+            <h1 class="text-lg font-semibold text-[#29261e] tracking-tight">Claude Code Gateway</h1>
+          </div>
           <nav class="flex items-center gap-1">
             <router-link
               :to="{ name: 'accounts' }"

@@ -96,6 +96,8 @@ impl AccountStore {
             rate_limited_at: Self::parse_optional_time(row, "rate_limited_at"),
             rate_limit_reset_at: Self::parse_optional_time(row, "rate_limit_reset_at"),
             disable_reason: row.try_get::<String, _>("disable_reason").unwrap_or_default(),
+            auto_telemetry: row.try_get::<i32, _>("auto_telemetry").unwrap_or(0) != 0,
+            telemetry_count: row.try_get::<i64, _>("telemetry_count").unwrap_or(0),
             usage_data: Self::parse_json(row, "usage_data"),
             usage_fetched_at: Self::parse_optional_time(row, "usage_fetched_at"),
             created_at: Self::parse_time(row, "created_at"),
@@ -127,13 +129,14 @@ impl AccountStore {
         let expires_at = a.expires_at.map(|t| self.fmt_time(t));
         let oauth_refreshed_at = a.oauth_refreshed_at.map(|t| self.fmt_time(t));
 
+        let auto_telemetry_int: i32 = if a.auto_telemetry { 1 } else { 0 };
         let row: AnyRow = sqlx::query(
             r#"INSERT INTO accounts (name, email, status, token, proxy_url,
                 auth_type, access_token, refresh_token, oauth_expires_at, oauth_refreshed_at, auth_error,
                 device_id, canonical_env, canonical_prompt_env, canonical_process,
                 billing_mode, account_uuid, organization_uuid, subscription_type,
-                concurrency, priority)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+                concurrency, priority, auto_telemetry)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
             RETURNING id, created_at, updated_at"#,
         )
         .bind(&a.name)
@@ -157,6 +160,7 @@ impl AccountStore {
         .bind(&a.subscription_type)
         .bind(a.concurrency)
         .bind(a.priority)
+        .bind(auto_telemetry_int)
         .fetch_one(&self.pool)
         .await?;
 
@@ -169,13 +173,14 @@ impl AccountStore {
     pub async fn update(&self, a: &Account) -> Result<(), AppError> {
         let expires_at = a.expires_at.map(|t| self.fmt_time(t));
         let oauth_refreshed_at = a.oauth_refreshed_at.map(|t| self.fmt_time(t));
+        let auto_telemetry_int: i32 = if a.auto_telemetry { 1 } else { 0 };
         let q = format!(
             r#"UPDATE accounts SET name=$1, email=$2, status=$3, token=$4,
                 auth_type=$5, access_token=$6, refresh_token=$7, oauth_expires_at=$8, oauth_refreshed_at=$9,
                 auth_error=$10, proxy_url=$11, billing_mode=$12,
                 account_uuid=$13, organization_uuid=$14, subscription_type=$15,
-                concurrency=$16, priority=$17, updated_at={}
-            WHERE id=$18"#,
+                concurrency=$16, priority=$17, auto_telemetry=$18, updated_at={}
+            WHERE id=$19"#,
             self.now_expr()
         );
         sqlx::query(&q)
@@ -196,6 +201,7 @@ impl AccountStore {
             .bind(&a.subscription_type)
             .bind(a.concurrency)
             .bind(a.priority)
+            .bind(auto_telemetry_int)
             .bind(a.id)
             .execute(&self.pool)
             .await?;
@@ -389,6 +395,19 @@ impl AccountStore {
         Ok(())
     }
 
+    pub async fn increment_telemetry_count(&self, id: i64, delta: i64) -> Result<(), AppError> {
+        let q = format!(
+            "UPDATE accounts SET telemetry_count = telemetry_count + $1, updated_at={} WHERE id=$2",
+            self.now_expr()
+        );
+        sqlx::query(&q)
+            .bind(delta)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn list_schedulable(&self) -> Result<Vec<Account>, AppError> {
         let q = format!(
             r#"SELECT {} FROM accounts
@@ -408,4 +427,5 @@ const ACCOUNT_COLS: &str = r#"id, name, email, status, token, auth_type, access_
     canonical_env, canonical_prompt_env, canonical_process,
     billing_mode, account_uuid, organization_uuid, subscription_type,
     concurrency, priority, rate_limited_at, rate_limit_reset_at,
-    disable_reason, usage_data, usage_fetched_at, created_at, updated_at"#;
+    disable_reason, auto_telemetry, telemetry_count,
+    usage_data, usage_fetched_at, created_at, updated_at"#;

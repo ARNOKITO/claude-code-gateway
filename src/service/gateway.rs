@@ -13,22 +13,26 @@ use crate::service::account::AccountService;
 use crate::service::rewriter::{
     clean_session_id_from_body, detect_client_type, ClientType, Rewriter,
 };
+use crate::service::telemetry::TelemetryService;
 
 const UPSTREAM_BASE: &str = "https://api.anthropic.com";
 
 pub struct GatewayService {
     account_svc: Arc<AccountService>,
     rewriter: Arc<Rewriter>,
+    telemetry_svc: Arc<TelemetryService>,
 }
 
 impl GatewayService {
     pub fn new(
         account_svc: Arc<AccountService>,
         rewriter: Arc<Rewriter>,
+        telemetry_svc: Arc<TelemetryService>,
     ) -> Self {
         Self {
             account_svc,
             rewriter,
+            telemetry_svc,
         }
     }
 
@@ -83,6 +87,25 @@ impl GatewayService {
             .map_err(|e| {
                 AppError::ServiceUnavailable(format!("no available account: {}", e))
             })?;
+
+        // 自动遥测：拦截遥测请求 + 激活会话
+        if account.auto_telemetry {
+            use crate::service::telemetry::{is_telemetry_path, fake_metrics_enabled_response, fake_telemetry_response};
+
+            if is_telemetry_path(&path) {
+                let body = if path.contains("/metrics_enabled") {
+                    fake_metrics_enabled_response()
+                } else {
+                    fake_telemetry_response()
+                };
+                debug!("telemetry: intercepted {} for account {}", path, account.id);
+                return Ok(axum::Json(body).into_response());
+            }
+
+            if path.starts_with("/v1/messages") {
+                self.telemetry_svc.activate_session(&account).await;
+            }
+        }
 
         // 获取并发槽位
         let acquired = self

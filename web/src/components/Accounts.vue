@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { api, type Account } from '../api';
+import { api, type Account, type OAuthExchangeResult } from '../api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -46,6 +46,7 @@ const form = ref({
   subscription_type: '',
   concurrency: 3,
   priority: 50,
+  auto_telemetry: false,
 });
 /** 正在测试的账号 ID */
 const testing = ref<number | null>(null);
@@ -105,6 +106,7 @@ function openCreate() {
     subscription_type: '',
     concurrency: 3,
     priority: 50,
+    auto_telemetry: false,
   };
   showForm.value = true;
 }
@@ -130,6 +132,7 @@ function openEdit(a: Account) {
     subscription_type: a.subscription_type || '',
     concurrency: a.concurrency,
     priority: a.priority,
+    auto_telemetry: a.auto_telemetry ?? false,
   };
   showForm.value = true;
 }
@@ -164,6 +167,7 @@ async function save() {
       updates.subscription_type = form.value.subscription_type || null;
       updates.concurrency = form.value.concurrency;
       updates.priority = form.value.priority;
+      updates.auto_telemetry = form.value.auto_telemetry;
       await api.updateAccount(editing.value.id, updates);
     } else {
       if (form.value.auth_type === 'setup_token' && !form.value.setup_token.trim()) {
@@ -186,6 +190,7 @@ async function save() {
         subscription_type: form.value.subscription_type || null,
         concurrency: form.value.concurrency,
         priority: form.value.priority,
+        auto_telemetry: form.value.auto_telemetry,
       };
       if (expiresAt) payload.expires_at = Number(expiresAt);
       await api.createAccount(payload);
@@ -360,9 +365,118 @@ function formatExpiresAt(expiresAt?: number | null): string {
   return new Date(expiresAt).toLocaleString('zh-CN');
 }
 
+/**
+ * 格式化字节数为可读字符串
+ */
+function formatBytes(bytes?: number): string {
+  if (!bytes) return '—';
+  if (bytes >= 1_073_741_824) return (bytes / 1_073_741_824).toFixed(0) + 'G';
+  if (bytes >= 1_048_576) return (bytes / 1_048_576).toFixed(0) + 'M';
+  if (bytes >= 1024) return (bytes / 1024).toFixed(0) + 'K';
+  return bytes + 'B';
+}
+
 /** 切换认证方式 */
 function setAuthType(authType: 'setup_token' | 'oauth') {
   form.value.auth_type = authType;
+}
+
+// --- OAuth 授权流程 ---
+const showOAuthFlow = ref(false);
+const oauthMode = ref<'oauth' | 'setup_token'>('oauth');
+const oauthProxyUrl = ref('');
+const oauthSessionId = ref('');
+const oauthAuthUrl = ref('');
+const oauthCode = ref('');
+const oauthLoading = ref(false);
+const oauthResult = ref<OAuthExchangeResult | null>(null);
+const oauthStep = ref<'generate' | 'exchange' | 'done'>('generate');
+
+/** 打开 OAuth 授权流程弹窗 */
+function openOAuthFlow() {
+  oauthMode.value = 'oauth';
+  oauthProxyUrl.value = '';
+  oauthSessionId.value = '';
+  oauthAuthUrl.value = '';
+  oauthCode.value = '';
+  oauthResult.value = null;
+  oauthStep.value = 'generate';
+  oauthLoading.value = false;
+  showOAuthFlow.value = true;
+}
+
+/** 生成授权链接 */
+async function generateOAuthUrl() {
+  oauthLoading.value = true;
+  try {
+    const proxy = oauthProxyUrl.value.trim() || undefined;
+    const res = oauthMode.value === 'oauth'
+      ? await api.generateAuthUrl(proxy)
+      : await api.generateSetupTokenUrl(proxy);
+    oauthSessionId.value = res.session_id;
+    oauthAuthUrl.value = res.auth_url;
+    oauthStep.value = 'exchange';
+  } catch (e: unknown) {
+    toast((e as Error).message || '生成授权链接失败');
+  }
+  oauthLoading.value = false;
+}
+
+/** 交换 code */
+async function exchangeOAuthCode() {
+  const code = oauthCode.value.trim();
+  if (!code) {
+    toast('请输入授权码');
+    return;
+  }
+  oauthLoading.value = true;
+  try {
+    const res = oauthMode.value === 'oauth'
+      ? await api.exchangeCode(oauthSessionId.value, code)
+      : await api.exchangeSetupTokenCode(oauthSessionId.value, code);
+    oauthResult.value = res;
+    oauthStep.value = 'done';
+  } catch (e: unknown) {
+    toast((e as Error).message || '交换 Token 失败');
+  }
+  oauthLoading.value = false;
+}
+
+/** 将授权结果填入新建账号表单 */
+function applyOAuthResult() {
+  const r = oauthResult.value;
+  if (!r) return;
+  showOAuthFlow.value = false;
+  editing.value = null;
+  const isSetupToken = oauthMode.value === 'setup_token';
+  form.value = {
+    name: '',
+    email: r.email_address || '',
+    auth_type: isSetupToken ? 'setup_token' : 'oauth',
+    setup_token: isSetupToken ? r.access_token : '',
+    access_token: isSetupToken ? '' : (r.access_token || ''),
+    refresh_token: isSetupToken ? '' : (r.refresh_token || ''),
+    expires_at: (!isSetupToken && r.expires_at) ? String(r.expires_at * 1000) : '',
+    proxy_url: oauthProxyUrl.value || '',
+    billing_mode: 'strip',
+    account_uuid: r.account_uuid || '',
+    organization_uuid: r.organization_uuid || '',
+    subscription_type: '',
+    concurrency: 3,
+    priority: 50,
+    auto_telemetry: false,
+  };
+  showForm.value = true;
+}
+
+/** 复制文本到剪贴板 */
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('已复制');
+  } catch {
+    toast('复制失败');
+  }
 }
 </script>
 
@@ -371,12 +485,20 @@ function setAuthType(authType: 'setup_token' | 'oauth') {
     <!-- 标题栏 -->
     <div class="flex justify-between items-center">
       <h2 class="text-lg font-semibold text-[#29261e]">账号管理</h2>
-      <Button
-        @click="openCreate"
-        class="bg-[#c4704f] hover:bg-[#b5623f] text-white font-medium rounded-xl transition-all duration-200 hover:shadow-md"
-      >
-        添加账号
-      </Button>
+      <div class="flex gap-2">
+        <Button
+          @click="openOAuthFlow"
+          class="bg-[#c4704f] hover:bg-[#b5623f] text-white font-medium rounded-xl transition-all duration-200 hover:shadow-md"
+        >
+          授权登录
+        </Button>
+        <Button
+          @click="openCreate"
+          class="bg-[#c4704f] hover:bg-[#b5623f] text-white font-medium rounded-xl transition-all duration-200 hover:shadow-md"
+        >
+          添加账号
+        </Button>
+      </div>
     </div>
 
     <!-- 账号卡片列表 -->
@@ -432,6 +554,16 @@ function setAuthType(authType: 'setup_token' | 'oauth') {
                 <p class="text-sm text-[#8c8475] truncate">{{ authTypeLabel(a.auth_type) }}</p>
               </div>
               <div>
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">自动遥测</p>
+                <p class="text-sm" :class="a.auto_telemetry ? 'text-emerald-600' : 'text-[#8c8475]'">
+                  {{ a.auto_telemetry ? '已开启' : '关闭' }}
+                  <span v-if="a.telemetry_count > 0" class="text-[#b5b0a6] text-xs">· 已发送 {{ a.telemetry_count }} 次</span>
+                </p>
+                <p v-if="a.telemetry_expires_at" class="text-xs text-amber-500 mt-0.5">
+                  遥测中 · 停止于 {{ new Date(a.telemetry_expires_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}
+                </p>
+              </div>
+              <div>
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">
                   {{ a.auth_type === 'oauth' ? 'Refresh Token' : 'Setup Token' }}
                 </p>
@@ -444,6 +576,24 @@ function setAuthType(authType: 'setup_token' | 'oauth') {
               <div v-if="a.auth_type === 'oauth' && a.auth_error">
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">认证错误</p>
                 <p class="text-xs text-red-500 line-clamp-2">{{ a.auth_error }}</p>
+              </div>
+              <div>
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">环境指纹</p>
+                <p class="text-xs text-[#8c8475] truncate">
+                  {{ a.canonical_env?.platform || '—' }} / {{ a.canonical_env?.arch || '—' }} · v{{ a.canonical_env?.version || '—' }}
+                </p>
+              </div>
+              <div>
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">提示词环境</p>
+                <p class="text-xs text-[#8c8475] truncate">
+                  {{ a.canonical_prompt_env?.platform || '—' }} · {{ a.canonical_prompt_env?.shell || '—' }} · {{ a.canonical_prompt_env?.working_dir || '—' }}
+                </p>
+              </div>
+              <div>
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">进程指纹</p>
+                <p class="text-xs text-[#8c8475] truncate">
+                  内存 {{ formatBytes(a.canonical_process?.constrained_memory) }} · RSS {{ formatBytes(a.canonical_process?.rss_range?.[0]) }}–{{ formatBytes(a.canonical_process?.rss_range?.[1]) }}
+                </p>
               </div>
             </div>
           </div>
@@ -803,6 +953,32 @@ function setAuthType(authType: 'setup_token' | 'oauth') {
               />
             </div>
           </div>
+          <div class="space-y-2">
+            <Label class="text-[#5c5647] text-sm">自动遥测</Label>
+            <div class="flex gap-2">
+              <button
+                type="button"
+                @click="form.auto_telemetry = false"
+                class="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-200"
+                :class="!form.auto_telemetry
+                  ? 'bg-[#f9f6f1] border-[#8c8475] text-[#5c5647]'
+                  : 'bg-[#f9f6f1] border-[#e8e2d9] text-[#8c8475] hover:border-[#8c8475]/40'"
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                @click="form.auto_telemetry = true"
+                class="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-200"
+                :class="form.auto_telemetry
+                  ? 'bg-emerald-50 border-emerald-400 text-emerald-600'
+                  : 'bg-[#f9f6f1] border-[#e8e2d9] text-[#8c8475] hover:border-emerald-300'"
+              >
+                开启
+              </button>
+            </div>
+            <p class="text-xs text-[#b5b0a6]">开启后由网关代替客户端发送遥测请求</p>
+          </div>
           <div class="flex gap-4">
             <div class="flex-1 space-y-2">
               <Label class="text-[#5c5647] text-sm">并发数</Label>
@@ -868,6 +1044,203 @@ function setAuthType(authType: 'setup_token' | 'oauth') {
             删除
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- OAuth 授权流程弹窗 -->
+    <Dialog v-model:open="showOAuthFlow">
+      <DialogContent class="bg-white border-[#e8e2d9] rounded-2xl text-[#29261e] sm:max-w-lg max-h-[85vh] flex flex-col">
+        <DialogHeader class="flex-shrink-0">
+          <DialogTitle class="text-[#29261e] text-lg">OAuth 授权</DialogTitle>
+          <DialogDescription class="text-[#8c8475]">
+            通过浏览器完成 OAuth 授权，自动获取 Token 和账号信息
+          </DialogDescription>
+        </DialogHeader>
+
+        <div class="space-y-4 mt-2 overflow-y-auto flex-1 pr-1">
+          <!-- 步骤 1：选择模式并生成链接 -->
+          <template v-if="oauthStep === 'generate'">
+            <div class="space-y-2">
+              <Label class="text-[#5c5647] text-sm">授权类型</Label>
+              <div class="flex gap-2">
+                <button
+                  type="button"
+                  @click="oauthMode = 'oauth'"
+                  class="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-200"
+                  :class="oauthMode === 'oauth'
+                    ? 'bg-amber-50 border-amber-400 text-amber-600'
+                    : 'bg-[#f9f6f1] border-[#e8e2d9] text-[#8c8475] hover:border-amber-300'"
+                >
+                  OAuth（完整）
+                </button>
+                <button
+                  type="button"
+                  @click="oauthMode = 'setup_token'"
+                  class="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-200"
+                  :class="oauthMode === 'setup_token'
+                    ? 'bg-[#c4704f]/10 border-[#c4704f] text-[#c4704f]'
+                    : 'bg-[#f9f6f1] border-[#e8e2d9] text-[#8c8475] hover:border-[#c4704f]/40'"
+                >
+                  Setup Token
+                </button>
+              </div>
+              <p class="text-xs text-[#b5b0a6]">
+                {{ oauthMode === 'oauth' ? '完整 scope，支持 profile、用量查询等' : '仅 user:inference scope，有效期 1 年' }}
+              </p>
+            </div>
+            <div class="space-y-2">
+              <Label class="text-[#5c5647] text-sm">代理地址（选填）</Label>
+              <Input
+                v-model="oauthProxyUrl"
+                placeholder="http:// 或 socks5://"
+                class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
+              />
+            </div>
+            <Button
+              @click="generateOAuthUrl"
+              :disabled="oauthLoading"
+              class="w-full bg-amber-500 hover:bg-amber-600 text-white font-medium rounded-xl transition-all duration-200"
+            >
+              {{ oauthLoading ? '生成中...' : '生成授权链接' }}
+            </Button>
+          </template>
+
+          <!-- 步骤 2：显示链接 + 输入 code -->
+          <template v-if="oauthStep === 'exchange'">
+            <div class="space-y-2">
+              <Label class="text-[#5c5647] text-sm">授权链接</Label>
+              <div class="relative">
+                <Textarea
+                  :model-value="oauthAuthUrl"
+                  readonly
+                  :rows="3"
+                  class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] font-mono text-xs pr-16"
+                />
+                <div class="absolute right-2 top-2 flex gap-1">
+                  <button
+                    type="button"
+                    @click="copyText(oauthAuthUrl)"
+                    class="px-2 py-1 text-xs bg-[#c4704f] text-white rounded-md hover:bg-[#b5623f] transition-colors"
+                  >
+                    复制
+                  </button>
+                </div>
+              </div>
+              <a
+                :href="oauthAuthUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 underline"
+              >
+                点击打开授权页面 ↗
+              </a>
+            </div>
+            <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700 space-y-1">
+              <p class="font-medium">操作步骤：</p>
+              <ol class="list-decimal list-inside space-y-0.5 text-amber-600">
+                <li>点击上方链接或复制到浏览器打开</li>
+                <li>完成 Claude 登录授权</li>
+                <li>授权完成后，从回调页面复制授权码</li>
+                <li>将授权码粘贴到下方输入框</li>
+              </ol>
+            </div>
+            <div class="space-y-2">
+              <Label class="text-[#5c5647] text-sm">授权码 <span class="text-red-500">*</span></Label>
+              <Textarea
+                v-model="oauthCode"
+                :rows="2"
+                placeholder="粘贴授权码（authorization code）"
+                class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20 font-mono text-sm"
+              />
+            </div>
+            <div class="flex gap-2">
+              <Button
+                variant="ghost"
+                @click="oauthStep = 'generate'"
+                class="text-[#8c8475] hover:text-[#29261e] hover:bg-[#f0ebe4]"
+              >
+                返回
+              </Button>
+              <Button
+                @click="exchangeOAuthCode"
+                :disabled="oauthLoading || !oauthCode.trim()"
+                class="flex-1 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded-xl transition-all duration-200"
+              >
+                {{ oauthLoading ? '交换中...' : '交换 Token' }}
+              </Button>
+            </div>
+          </template>
+
+          <!-- 步骤 3：显示结果 -->
+          <template v-if="oauthStep === 'done' && oauthResult">
+            <div class="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-700 font-medium">
+              授权成功
+            </div>
+            <div class="space-y-3">
+              <div v-if="oauthResult.email_address" class="space-y-1">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">邮箱</p>
+                <p class="text-sm text-[#29261e]">{{ oauthResult.email_address }}</p>
+              </div>
+              <div v-if="oauthResult.account_uuid" class="space-y-1">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">Account UUID</p>
+                <p class="font-mono text-xs text-[#5c5647] break-all">{{ oauthResult.account_uuid }}</p>
+              </div>
+              <div v-if="oauthResult.organization_uuid" class="space-y-1">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">Organization UUID</p>
+                <p class="font-mono text-xs text-[#5c5647] break-all">{{ oauthResult.organization_uuid }}</p>
+              </div>
+              <div class="space-y-1">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">Access Token</p>
+                <div class="flex items-center gap-2">
+                  <p class="font-mono text-xs text-[#8c8475] truncate flex-1">{{ oauthResult.access_token.slice(0, 30) }}...</p>
+                  <button
+                    type="button"
+                    @click="copyText(oauthResult.access_token)"
+                    class="px-2 py-0.5 text-[10px] bg-[#f0ebe4] text-[#5c5647] rounded hover:bg-[#e8e2d9] transition-colors flex-shrink-0"
+                  >
+                    复制
+                  </button>
+                </div>
+              </div>
+              <div v-if="oauthResult.refresh_token" class="space-y-1">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">Refresh Token</p>
+                <div class="flex items-center gap-2">
+                  <p class="font-mono text-xs text-[#8c8475] truncate flex-1">{{ oauthResult.refresh_token.slice(0, 30) }}...</p>
+                  <button
+                    type="button"
+                    @click="copyText(oauthResult.refresh_token)"
+                    class="px-2 py-0.5 text-[10px] bg-[#f0ebe4] text-[#5c5647] rounded hover:bg-[#e8e2d9] transition-colors flex-shrink-0"
+                  >
+                    复制
+                  </button>
+                </div>
+              </div>
+              <div class="space-y-1">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">Scope</p>
+                <p class="text-xs text-[#8c8475]">{{ oauthResult.scope || '—' }}</p>
+              </div>
+              <div class="space-y-1">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">过期时间</p>
+                <p class="text-xs text-[#8c8475]">{{ new Date(oauthResult.expires_at * 1000).toLocaleString('zh-CN') }}</p>
+              </div>
+            </div>
+            <div class="flex gap-2 pt-2">
+              <Button
+                variant="ghost"
+                @click="showOAuthFlow = false"
+                class="text-[#8c8475] hover:text-[#29261e] hover:bg-[#f0ebe4]"
+              >
+                关闭
+              </Button>
+              <Button
+                @click="applyOAuthResult"
+                class="flex-1 bg-[#c4704f] hover:bg-[#b5623f] text-white font-medium rounded-xl transition-all duration-200"
+              >
+                填入并创建账号
+              </Button>
+            </div>
+          </template>
+        </div>
       </DialogContent>
     </Dialog>
   </div>

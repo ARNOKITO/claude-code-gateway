@@ -34,6 +34,9 @@ async function submit() {
   <div class="min-h-screen flex items-center justify-center px-4">
     <Card class="w-full max-w-sm bg-white border-[#e8e2d9] rounded-2xl shadow-lg shadow-black/5">
       <CardHeader class="text-center pb-2">
+        <div class="flex justify-center mb-2">
+          <img src="/favicon.svg" alt="Logo" class="w-10 h-10" />
+        </div>
         <CardTitle class="text-2xl font-semibold text-[#29261e] tracking-tight">Claude Code Gateway</CardTitle>
         <p class="text-[#8c8475] text-sm mt-1">管理控制台</p>
       </CardHeader>

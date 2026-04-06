@@ -63,11 +63,17 @@ async fn main() {
         cache.clone(),
     ));
     let rewriter = Arc::new(service::rewriter::Rewriter::new());
+    let telemetry_svc = Arc::new(service::telemetry::TelemetryService::new(
+        account_store.clone(),
+        account_svc.clone(),
+    ));
     let gateway_svc = Arc::new(service::gateway::GatewayService::new(
         account_svc.clone(),
         rewriter.clone(),
+        telemetry_svc.clone(),
     ));
     let token_tester = Arc::new(service::oauth::TokenTester::new());
+    let oauth_flow_svc = Arc::new(service::oauth_flow::OAuthFlowService::new());
 
     let app = handler::router::build_router(
         &cfg,
@@ -75,6 +81,8 @@ async fn main() {
         account_svc,
         token_tester,
         token_store,
+        oauth_flow_svc,
+        telemetry_svc,
     );
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);

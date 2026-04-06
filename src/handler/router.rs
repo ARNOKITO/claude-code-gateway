@@ -17,6 +17,8 @@ use crate::model::api_token::{self, ApiToken};
 use crate::service::account::AccountService;
 use crate::service::gateway::GatewayService;
 use crate::service::oauth::TokenTester;
+use crate::service::oauth_flow::OAuthFlowService;
+use crate::service::telemetry::TelemetryService;
 use crate::store::token_store::TokenStore;
 
 #[derive(Clone)]
@@ -25,6 +27,8 @@ pub struct AppState {
     pub account_svc: Arc<AccountService>,
     pub token_tester: Arc<TokenTester>,
     pub token_store: Arc<TokenStore>,
+    pub oauth_flow_svc: Arc<OAuthFlowService>,
+    pub telemetry_svc: Arc<TelemetryService>,
     pub admin_password: String,
 }
 
@@ -34,12 +38,16 @@ pub fn build_router(
     account_svc: Arc<AccountService>,
     token_tester: Arc<TokenTester>,
     token_store: Arc<TokenStore>,
+    oauth_flow_svc: Arc<OAuthFlowService>,
+    telemetry_svc: Arc<TelemetryService>,
 ) -> Router {
     let state = AppState {
         gateway_svc,
         account_svc,
         token_tester,
         token_store,
+        oauth_flow_svc,
+        telemetry_svc,
         admin_password: cfg.admin.password.clone(),
     };
 
@@ -53,7 +61,8 @@ pub fn build_router(
 
     // 前端静态资源
     let asset_routes = Router::new()
-        .route("/assets/*rest", get(asset_handler));
+        .route("/assets/*rest", get(asset_handler))
+        .route("/favicon.svg", get(asset_handler));
 
     // 管理 API（密码认证，完整路径注册）
     let admin_routes = Router::new()
@@ -70,6 +79,10 @@ pub fn build_router(
             put(update_token).delete(delete_token_handler),
         )
         .route("/admin/dashboard", get(get_dashboard))
+        .route("/admin/oauth/generate-auth-url", post(oauth_generate_auth_url))
+        .route("/admin/oauth/generate-setup-token-url", post(oauth_generate_setup_token_url))
+        .route("/admin/oauth/exchange-code", post(oauth_exchange_code))
+        .route("/admin/oauth/exchange-setup-token-code", post(oauth_exchange_setup_token_code))
         .layer(middleware::from_fn(move |req, next: Next| {
             let pwd = admin_password.clone();
             admin_auth(pwd, req, next)
@@ -125,8 +138,19 @@ async fn list_accounts(
     let page_size = query.page_size.unwrap_or(12).clamp(1, 100);
     let (accounts, total) = state.account_svc.list_accounts_paged(page, page_size).await?;
     let total_pages = (total + page_size - 1) / page_size;
+
+    // 为每个账号附加遥测会话过期时间
+    let mut data: Vec<serde_json::Value> = Vec::with_capacity(accounts.len());
+    for a in &accounts {
+        let mut obj = serde_json::to_value(a).unwrap_or_default();
+        if let Some(expires) = state.telemetry_svc.get_session_expires_at(a.id).await {
+            obj["telemetry_expires_at"] = serde_json::json!(expires.to_rfc3339());
+        }
+        data.push(obj);
+    }
+
     Ok(Json(serde_json::json!({
-        "data": accounts,
+        "data": data,
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -151,6 +175,7 @@ struct CreateAccountRequest {
     subscription_type: Option<String>,
     concurrency: Option<i32>,
     priority: Option<i32>,
+    auto_telemetry: Option<bool>,
 }
 
 async fn create_account(
@@ -194,6 +219,8 @@ async fn create_account(
         rate_limited_at: None,
         rate_limit_reset_at: None,
         disable_reason: String::new(),
+        auto_telemetry: req.auto_telemetry.unwrap_or(false),
+        telemetry_count: 0,
         usage_data: serde_json::json!({}),
         usage_fetched_at: None,
         created_at: chrono::Utc::now(),
@@ -293,6 +320,27 @@ async fn update_account(
         if !billing_mode.is_empty() {
             existing.billing_mode = billing_mode.to_string().into();
         }
+    }
+    if updates.get("account_uuid").is_some() {
+        existing.account_uuid = updates
+            .get("account_uuid")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    }
+    if updates.get("organization_uuid").is_some() {
+        existing.organization_uuid = updates
+            .get("organization_uuid")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    }
+    if updates.get("subscription_type").is_some() {
+        existing.subscription_type = updates
+            .get("subscription_type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    }
+    if let Some(auto_telemetry) = updates.get("auto_telemetry").and_then(|v| v.as_bool()) {
+        existing.auto_telemetry = auto_telemetry;
     }
 
     state.account_svc.update_account(&existing).await?;
@@ -451,6 +499,38 @@ async fn get_dashboard(
         },
         "tokens": token_count,
     })))
+}
+
+// --- OAuth Flow Handlers ---
+
+async fn oauth_generate_auth_url(
+    State(state): State<AppState>,
+    Json(req): Json<crate::service::oauth_flow::GenerateAuthUrlRequest>,
+) -> Json<crate::service::oauth_flow::GenerateAuthUrlResponse> {
+    Json(state.oauth_flow_svc.generate_auth_url(&req))
+}
+
+async fn oauth_generate_setup_token_url(
+    State(state): State<AppState>,
+    Json(req): Json<crate::service::oauth_flow::GenerateAuthUrlRequest>,
+) -> Json<crate::service::oauth_flow::GenerateAuthUrlResponse> {
+    Json(state.oauth_flow_svc.generate_setup_token_url(&req))
+}
+
+async fn oauth_exchange_code(
+    State(state): State<AppState>,
+    Json(req): Json<crate::service::oauth_flow::ExchangeCodeRequest>,
+) -> Result<Json<crate::service::oauth_flow::ExchangeCodeResponse>, AppError> {
+    let resp = state.oauth_flow_svc.exchange_code(&req).await?;
+    Ok(Json(resp))
+}
+
+async fn oauth_exchange_setup_token_code(
+    State(state): State<AppState>,
+    Json(req): Json<crate::service::oauth_flow::ExchangeCodeRequest>,
+) -> Result<Json<crate::service::oauth_flow::ExchangeCodeResponse>, AppError> {
+    let resp = state.oauth_flow_svc.exchange_setup_token_code(&req).await?;
+    Ok(Json(resp))
 }
 
 // --- 内嵌前端静态资源 ---

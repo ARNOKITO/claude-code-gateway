@@ -180,6 +180,12 @@ pub struct Account {
     pub rate_limit_reset_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub disable_reason: String,
+    /// 是否启用自动遥测。
+    #[serde(default)]
+    pub auto_telemetry: bool,
+    /// 累计发送的遥测请求次数。
+    #[serde(default)]
+    pub telemetry_count: i64,
     #[serde(default)]
     pub usage_data: Value,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -36,12 +36,23 @@ export interface Account {
   auth_error?: string
   proxy_url: string
   device_id: string
+  canonical_env?: Record<string, unknown>
+  canonical_prompt_env?: Record<string, unknown>
+  canonical_process?: {
+    constrained_memory?: number
+    rss_range?: number[]
+    heap_total_range?: number[]
+    heap_used_range?: number[]
+  }
   billing_mode: string
   account_uuid?: string | null
   organization_uuid?: string | null
   subscription_type?: string | null
   concurrency: number
   priority: number
+  auto_telemetry: boolean
+  telemetry_count: number
+  telemetry_expires_at?: string
   rate_limited_at?: string
   rate_limit_reset_at?: string
   disable_reason?: string
@@ -86,6 +97,22 @@ export interface Dashboard {
   tokens: number;
 }
 
+export interface OAuthGenerateResult {
+  auth_url: string;
+  session_id: string;
+}
+
+export interface OAuthExchangeResult {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  expires_at: number;
+  scope: string;
+  account_uuid: string;
+  organization_uuid: string;
+  email_address: string;
+}
+
 export const api = {
   listAccounts: (page = 1, pageSize = 12) =>
     request<PagedResult<Account>>('GET', `/admin/accounts?page=${page}&page_size=${pageSize}`),
@@ -100,4 +127,13 @@ export const api = {
   updateToken: (id: number, t: Partial<ApiToken>) => request<ApiToken>('PUT', `/admin/tokens/${id}`, t),
   deleteToken: (id: number) => request<void>('DELETE', `/admin/tokens/${id}`),
   getDashboard: () => request<Dashboard>('GET', '/admin/dashboard'),
+
+  generateAuthUrl: (proxyUrl?: string) =>
+    request<OAuthGenerateResult>('POST', '/admin/oauth/generate-auth-url', { proxy_url: proxyUrl || null }),
+  generateSetupTokenUrl: (proxyUrl?: string) =>
+    request<OAuthGenerateResult>('POST', '/admin/oauth/generate-setup-token-url', { proxy_url: proxyUrl || null }),
+  exchangeCode: (sessionId: string, code: string) =>
+    request<OAuthExchangeResult>('POST', '/admin/oauth/exchange-code', { session_id: sessionId, code }),
+  exchangeSetupTokenCode: (sessionId: string, code: string) =>
+    request<OAuthExchangeResult>('POST', '/admin/oauth/exchange-setup-token-code', { session_id: sessionId, code }),
 }
